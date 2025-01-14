@@ -1,6 +1,7 @@
 ---
 title: "Google Cloud Storage"
 description: "Rclone docs for Google Cloud Storage"
+versionIntroduced: "v1.02"
 ---
 
 # {{< icon "fab fa-google" >}} Google Cloud Storage
@@ -116,9 +117,10 @@ Choose a number from below, or type in your own value
    \ "DURABLE_REDUCED_AVAILABILITY"
 storage_class> 5
 Remote config
-Use auto config?
- * Say Y if not sure
- * Say N if you are working on a remote or headless machine or Y didn't work
+Use web browser to automatically authenticate rclone with remote?
+ * Say Y if the machine running rclone has a web browser you can use
+ * Say N if running rclone on a (remote) machine without web browser access
+If not sure try Y. If Y failed, try N.
 y) Yes
 n) No
 y/n> y
@@ -126,24 +128,28 @@ If your browser doesn't open automatically go to the following link: http://127.
 Log in and authorize rclone for access
 Waiting for code...
 Got code
---------------------
-[remote]
-type = google cloud storage
-client_id =
-client_secret =
-token = {"AccessToken":"xxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","RefreshToken":"x/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_xxxxxxxxx","Expiry":"2014-07-17T20:49:14.929208288+01:00","Extra":null}
-project_number = 12345678
-object_acl = private
-bucket_acl = private
---------------------
+Configuration complete.
+Options:
+- type: google cloud storage
+- client_id:
+- client_secret:
+- token: {"AccessToken":"xxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","RefreshToken":"x/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_xxxxxxxxx","Expiry":"2014-07-17T20:49:14.929208288+01:00","Extra":null}
+- project_number: 12345678
+- object_acl: private
+- bucket_acl: private
+Keep this "remote" remote?
 y) Yes this is OK
 e) Edit this remote
 d) Delete this remote
 y/e/d> y
 ```
 
+See the [remote setup docs](/remote_setup/) for how to set it up on a
+machine with no Internet browser available.
+
 Note that rclone runs a webserver on your local machine to collect the
-token as returned from Google if you use auto config mode. This only
+token as returned from Google if using web browser to automatically 
+authenticate. This only
 runs from the moment it opens your browser to the moment you get back
 the verification code.  This is on `http://127.0.0.1:53682/` and this
 it may require you to unblock it temporarily if you are running a host
@@ -166,7 +172,7 @@ List the contents of a bucket
 Sync `/home/local/directory` to the remote bucket, deleting any excess
 files in the bucket.
 
-    rclone sync -i /home/local/directory remote:bucket
+    rclone sync --interactive /home/local/directory remote:bucket
 
 ### Service Account support
 
@@ -194,6 +200,55 @@ flow. If you'd rather stuff the contents of the credentials file into
 the rclone config file, you can set `service_account_credentials` with
 the actual contents of the file instead, or set the equivalent
 environment variable.
+
+### Service Account Authentication with Access Tokens
+
+Another option for service account authentication is to use access tokens via *gcloud impersonate-service-account*. Access tokens protect security by avoiding the use of the JSON
+key file, which can be breached. They also bypass oauth login flow, which is simpler 
+on remote VMs that lack a web browser.
+
+If you already have a working service account, skip to step 3. 
+
+#### 1. Create a service account using 
+
+    gcloud iam service-accounts create gcs-read-only 
+
+You can re-use an existing service account as well (like the one created above)
+
+#### 2. Attach a Viewer (read-only) or User (read-write) role to the service account 
+     $ PROJECT_ID=my-project
+     $ gcloud --verbose iam service-accounts add-iam-policy-binding \
+        gcs-read-only@${PROJECT_ID}.iam.gserviceaccount.com  \
+        --member=serviceAccount:gcs-read-only@${PROJECT_ID}.iam.gserviceaccount.com \
+        --role=roles/storage.objectViewer
+
+Use the Google Cloud console to identify a limited role. Some relevant pre-defined roles:
+
+* *roles/storage.objectUser* -- read-write access but no admin privileges
+* *roles/storage.objectViewer* -- read-only access to objects
+* *roles/storage.admin*  -- create buckets & administrative roles
+
+#### 3. Get a temporary access key for the service account
+
+    $ gcloud auth application-default print-access-token  \
+       --impersonate-service-account \
+          gcs-read-only@${PROJECT_ID}.iam.gserviceaccount.com  
+
+    ya29.c.c0ASRK0GbAFEewXD [truncated]
+
+#### 4. Update `access_token` setting
+hit `CTRL-C` when you see *waiting for code*.  This will save the config without doing oauth flow
+
+    rclone config update ${REMOTE_NAME} access_token ya29.c.c0Axxxx
+
+#### 5. Run rclone as usual
+
+    rclone ls dev-gcs:${MY_BUCKET}/
+
+### More Info on Service Accounts
+
+* [Official GCS Docs](https://cloud.google.com/compute/docs/access/service-accounts)
+* [Guide on Service Accounts using Key Files (less secure, but similar concepts)](https://forum.rclone.org/t/access-using-google-service-account/24822/2)
 
 ### Anonymous Access
 
@@ -241,7 +296,7 @@ Eg `--header-upload "Content-Type text/potato"`
 Note that the last of these is for setting custom metadata in the form
 `--header-upload "x-goog-meta-key: value"`
 
-### Modification time
+### Modification times
 
 Google Cloud Storage stores md5sum natively.
 Google's [gsutil](https://cloud.google.com/storage/docs/gsutil) tool stores modification time
@@ -273,7 +328,7 @@ as they can't be used in JSON strings.
 {{< rem autogenerated options start" - DO NOT EDIT - instead edit fs.RegInfo in backend/googlecloudstorage/googlecloudstorage.go then run make backenddocs" >}}
 ### Standard options
 
-Here are the standard options specific to google cloud storage (Google Cloud Storage (this is not Google Drive)).
+Here are the Standard options specific to google cloud storage (Google Cloud Storage (this is not Google Drive)).
 
 #### --gcs-client-id
 
@@ -311,6 +366,19 @@ Properties:
 
 - Config:      project_number
 - Env Var:     RCLONE_GCS_PROJECT_NUMBER
+- Type:        string
+- Required:    false
+
+#### --gcs-user-project
+
+User project.
+
+Optional - needed only for requester pays.
+
+Properties:
+
+- Config:      user_project
+- Env Var:     RCLONE_GCS_USER_PROJECT
 - Type:        string
 - Required:    false
 
@@ -546,9 +614,27 @@ Properties:
     - "DURABLE_REDUCED_AVAILABILITY"
         - Durable reduced availability storage class
 
+#### --gcs-env-auth
+
+Get GCP IAM credentials from runtime (environment variables or instance meta data if no env vars).
+
+Only applies if service_account_file and service_account_credentials is blank.
+
+Properties:
+
+- Config:      env_auth
+- Env Var:     RCLONE_GCS_ENV_AUTH
+- Type:        bool
+- Default:     false
+- Examples:
+    - "false"
+        - Enter credentials in the next step.
+    - "true"
+        - Get GCP IAM credentials from the environment (env vars or IAM).
+
 ### Advanced options
 
-Here are the advanced options specific to google cloud storage (Google Cloud Storage (this is not Google Drive)).
+Here are the Advanced options specific to google cloud storage (Google Cloud Storage (this is not Google Drive)).
 
 #### --gcs-token
 
@@ -587,6 +673,95 @@ Properties:
 - Type:        string
 - Required:    false
 
+#### --gcs-client-credentials
+
+Use client credentials OAuth flow.
+
+This will use the OAUTH2 client Credentials Flow as described in RFC 6749.
+
+Properties:
+
+- Config:      client_credentials
+- Env Var:     RCLONE_GCS_CLIENT_CREDENTIALS
+- Type:        bool
+- Default:     false
+
+#### --gcs-access-token
+
+Short-lived access token.
+
+Leave blank normally.
+Needed only if you want use short-lived access token instead of interactive login.
+
+Properties:
+
+- Config:      access_token
+- Env Var:     RCLONE_GCS_ACCESS_TOKEN
+- Type:        string
+- Required:    false
+
+#### --gcs-directory-markers
+
+Upload an empty object with a trailing slash when a new directory is created
+
+Empty folders are unsupported for bucket based remotes, this option creates an empty
+object ending with "/", to persist the folder.
+
+
+Properties:
+
+- Config:      directory_markers
+- Env Var:     RCLONE_GCS_DIRECTORY_MARKERS
+- Type:        bool
+- Default:     false
+
+#### --gcs-no-check-bucket
+
+If set, don't attempt to check the bucket exists or create it.
+
+This can be useful when trying to minimise the number of transactions
+rclone does if you know the bucket exists already.
+
+
+Properties:
+
+- Config:      no_check_bucket
+- Env Var:     RCLONE_GCS_NO_CHECK_BUCKET
+- Type:        bool
+- Default:     false
+
+#### --gcs-decompress
+
+If set this will decompress gzip encoded objects.
+
+It is possible to upload objects to GCS with "Content-Encoding: gzip"
+set. Normally rclone will download these files as compressed objects.
+
+If this flag is set then rclone will decompress these files with
+"Content-Encoding: gzip" as they are received. This means that rclone
+can't check the size and hash but the file contents will be decompressed.
+
+
+Properties:
+
+- Config:      decompress
+- Env Var:     RCLONE_GCS_DECOMPRESS
+- Type:        bool
+- Default:     false
+
+#### --gcs-endpoint
+
+Endpoint for the service.
+
+Leave blank normally.
+
+Properties:
+
+- Config:      endpoint
+- Env Var:     RCLONE_GCS_ENDPOINT
+- Type:        string
+- Required:    false
+
 #### --gcs-encoding
 
 The encoding for the backend.
@@ -597,8 +772,19 @@ Properties:
 
 - Config:      encoding
 - Env Var:     RCLONE_GCS_ENCODING
-- Type:        MultiEncoder
+- Type:        Encoding
 - Default:     Slash,CrLf,InvalidUtf8,Dot
+
+#### --gcs-description
+
+Description of the remote.
+
+Properties:
+
+- Config:      description
+- Env Var:     RCLONE_GCS_DESCRIPTION
+- Type:        string
+- Required:    false
 
 {{< rem autogenerated options stop >}}
 
@@ -609,6 +795,5 @@ this capability cannot determine free space for an rclone mount or
 use policy `mfs` (most free space) as a member of an rclone union
 remote.
 
-See [List of backends that do not support rclone about](https://rclone.org/overview/#optional-features)
-See [rclone about](https://rclone.org/commands/rclone_about/)
+See [List of backends that do not support rclone about](https://rclone.org/overview/#optional-features) and [rclone about](https://rclone.org/commands/rclone_about/)
 
