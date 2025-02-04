@@ -27,6 +27,9 @@ func init() {
 		Name:        "hasher",
 		Description: "Better checksums for other remotes",
 		NewFs:       NewFs,
+		MetadataInfo: &fs.MetadataInfo{
+			Help: `Any metadata supported by the underlying remote is read and written.`,
+		},
 		CommandHelp: commandHelp,
 		Options: []fs.Option{{
 			Name:     "remote",
@@ -111,6 +114,13 @@ func NewFs(ctx context.Context, fsname, rpath string, cmap configmap.Mapper) (fs
 		root: rpath,
 		opt:  opt,
 	}
+	// Correct root if definitely pointing to a file
+	if err == fs.ErrorIsFile {
+		f.root = path.Dir(f.root)
+		if f.root == "." || f.root == "/" {
+			f.root = ""
+		}
+	}
 	baseFeatures := baseFs.Features()
 	f.fpTime = baseFs.Precision() != fs.ModTimeNotSupported
 
@@ -154,10 +164,21 @@ func NewFs(ctx context.Context, fsname, rpath string, cmap configmap.Mapper) (fs
 	}
 
 	stubFeatures := &fs.Features{
-		CanHaveEmptyDirectories: true,
-		IsLocal:                 true,
-		ReadMimeType:            true,
-		WriteMimeType:           true,
+		CanHaveEmptyDirectories:  true,
+		IsLocal:                  true,
+		ReadMimeType:             true,
+		WriteMimeType:            true,
+		SetTier:                  true,
+		GetTier:                  true,
+		ReadMetadata:             true,
+		WriteMetadata:            true,
+		UserMetadata:             true,
+		ReadDirMetadata:          true,
+		WriteDirMetadata:         true,
+		WriteDirSetModTime:       true,
+		UserDirMetadata:          true,
+		DirModTimeUpdatesOnWrite: true,
+		PartialUploads:           true,
 	}
 	f.features = stubFeatures.Fill(ctx, f).Mask(ctx, f.Fs).WrapsFs(f, f.Fs)
 
@@ -282,7 +303,7 @@ func (f *Fs) CleanUp(ctx context.Context) error {
 	if do := f.Fs.Features().CleanUp; do != nil {
 		return do(ctx)
 	}
-	return errors.New("CleanUp not supported")
+	return errors.New("not supported by underlying remote")
 }
 
 // About gets quota information from the Fs
@@ -290,7 +311,7 @@ func (f *Fs) About(ctx context.Context) (*fs.Usage, error) {
 	if do := f.Fs.Features().About; do != nil {
 		return do(ctx)
 	}
-	return nil, errors.New("About not supported")
+	return nil, errors.New("not supported by underlying remote")
 }
 
 // ChangeNotify calls the passed function with a path that has had changes.
@@ -323,6 +344,22 @@ func (f *Fs) MergeDirs(ctx context.Context, dirs []fs.Directory) error {
 		return do(ctx, dirs)
 	}
 	return errors.New("MergeDirs not supported")
+}
+
+// DirSetModTime sets the directory modtime for dir
+func (f *Fs) DirSetModTime(ctx context.Context, dir string, modTime time.Time) error {
+	if do := f.Fs.Features().DirSetModTime; do != nil {
+		return do(ctx, dir, modTime)
+	}
+	return fs.ErrorNotImplemented
+}
+
+// MkdirMetadata makes the root directory of the Fs object
+func (f *Fs) MkdirMetadata(ctx context.Context, dir string, metadata fs.Metadata) (fs.Directory, error) {
+	if do := f.Fs.Features().MkdirMetadata; do != nil {
+		return do(ctx, dir, metadata)
+	}
+	return nil, fs.ErrorNotImplemented
 }
 
 // DirCacheFlush resets the directory cache - used in testing
@@ -402,7 +439,9 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 
 // Shutdown the backend, closing any background tasks and any cached connections.
 func (f *Fs) Shutdown(ctx context.Context) (err error) {
-	err = f.db.Stop(false)
+	if f.db != nil && !f.db.IsStopped() {
+		err = f.db.Stop(false)
+	}
 	if do := f.Fs.Features().Shutdown; do != nil {
 		if err2 := do(ctx); err2 != nil {
 			err = err2
@@ -485,6 +524,28 @@ func (o *Object) MimeType(ctx context.Context) string {
 	return ""
 }
 
+// Metadata returns metadata for an object
+//
+// It should return nil if there is no Metadata
+func (o *Object) Metadata(ctx context.Context) (fs.Metadata, error) {
+	do, ok := o.Object.(fs.Metadataer)
+	if !ok {
+		return nil, nil
+	}
+	return do.Metadata(ctx)
+}
+
+// SetMetadata sets metadata for an Object
+//
+// It should return fs.ErrorNotImplemented if it can't set metadata
+func (o *Object) SetMetadata(ctx context.Context, metadata fs.Metadata) error {
+	do, ok := o.Object.(fs.SetMetadataer)
+	if !ok {
+		return fs.ErrorNotImplemented
+	}
+	return do.SetMetadata(ctx, metadata)
+}
+
 // Check the interfaces are satisfied
 var (
 	_ fs.Fs              = (*Fs)(nil)
@@ -501,16 +562,13 @@ var (
 	_ fs.Abouter         = (*Fs)(nil)
 	_ fs.Wrapper         = (*Fs)(nil)
 	_ fs.MergeDirser     = (*Fs)(nil)
+	_ fs.DirSetModTimer  = (*Fs)(nil)
+	_ fs.MkdirMetadataer = (*Fs)(nil)
 	_ fs.DirCacheFlusher = (*Fs)(nil)
 	_ fs.ChangeNotifier  = (*Fs)(nil)
 	_ fs.PublicLinker    = (*Fs)(nil)
 	_ fs.UserInfoer      = (*Fs)(nil)
 	_ fs.Disconnecter    = (*Fs)(nil)
 	_ fs.Shutdowner      = (*Fs)(nil)
-	_ fs.Object          = (*Object)(nil)
-	_ fs.ObjectUnWrapper = (*Object)(nil)
-	_ fs.IDer            = (*Object)(nil)
-	_ fs.SetTierer       = (*Object)(nil)
-	_ fs.GetTierer       = (*Object)(nil)
-	_ fs.MimeTyper       = (*Object)(nil)
+	_ fs.FullObject      = (*Object)(nil)
 )
